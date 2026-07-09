@@ -1,1 +1,145 @@
-# probability_maximization_solver
+# Probability Maximization Solver
+
+MATLAB implementation of an inner-approximation (column generation) solver for **probability maximization problems** of the form
+
+```
+max  P(T x ≥ ξ)
+s.t. A x ≤ b
+```
+
+where ξ is a multivariate normal random vector, together with the **demand-side management (DSM) load scheduling** experiments reported in our paper:
+
+> R. Drenyovszki, E. Csizmás, C. I. Fábián: *Formulating a load scheduling problem as probability maximization: A computational study.* Submitted to Central European Journal of Operations Research (CEJOR), 2026.
+
+The scheduling model decides how many controllable appliances (and, optionally, charging/discharging batteries) should operate in each time window of a planning horizon, so that the probability of keeping the total load below a given limit is maximized subject to cost and operational constraints.
+
+## Method in brief
+
+The solver is a modified version of Prékopa's dual approach in which the **epigraph** of the convex function φ(z) = −log F(z) is approximated from the inside (F is the multivariate normal distribution function). A column generation scheme alternates between:
+
+1. a **linear programming master problem** (solved with CPLEX), built from function evaluations at test points z₀, …, z_k, and
+2. an **oracle** that generates an improving column by approximately maximizing the reduced cost: one gradient step plus one or two golden-section line-search steps on φ(z) − uᵀz.
+
+Function values and gradients of the multivariate normal distribution are computed with Alan Genz's QSIMVNV quasi–Monte Carlo routine; the gradient is assembled from conditional distribution function values (Prékopa, *Stochastic Programming*, Sec. 6.6.4). Owing to the randomized inner approximation, the method is tolerant of noise in the gradient estimates. See Appendix A of the paper and references [1–3] below for details.
+
+## Requirements
+
+- **MATLAB** (developed and tested with R2014a; newer versions should work)
+- **IBM ILOG CPLEX Optimization Studio** with the MATLAB connector (tested with 12.6.3). The free Community Edition is sufficient for the problem sizes in the paper.
+- No further toolboxes are required; Genz's `qsimvnv.m` is included in the repository.
+
+## Setup
+
+1. Clone the repository and add it to your MATLAB path (or `cd` into it).
+2. Edit the CPLEX paths at the top of `callDmandSideProblem.m` to match your installation:
+
+```matlab
+addpath('C:\Program Files\IBM\ILOG\CPLEX_Studio_Community1262\cplex\matlab\x64_win64');
+addpath('C:\Program Files\IBM\ILOG\CPLEX_Studio_Community1262\cplex\examples\src\matlab');
+```
+
+3. Make sure the output directory set in `CEJOR_experiments.m` (`save_directory`, by default `.\CEJOR_exp_20260625\`) exists. Note that the default paths use Windows separators; on Linux/macOS adjust them accordingly.
+
+## Quick start
+
+Open `CEJOR_experiments.m`, uncomment the experiment block you want to run, and execute the script:
+
+```matlab
+CEJOR_experiments
+```
+
+Each block sets a handful of global configuration variables and then calls the driver `callDmandSideProblem`. The pre-defined blocks correspond one-to-one to the experiments in Section 4 of the paper:
+
+| Block            | Paper section | Model                  | `R_type`  | `std_type`   | `use_batteries` | `cons_op` | `maxItNumber` | `dimension` |
+|------------------|--------------|------------------------|-----------|--------------|-----------------|-----------|---------------|-------------|
+| `exp1_basic`     | 4.1 / Fig. 4, 6a | Basic              | `no_corr` | `constant`   | `false`         | 1         | 50            | 24          |
+| `exp2_basic`     | 4.1 / Fig. 5, 6b | Basic              | `no_corr` | `increasing` | `false`         | 1         | 50            | 24          |
+| `exp1_battery`   | 4.2 / Fig. 7, 9a | + batteries        | `no_corr` | `constant`   | `true`          | 1         | 50            | 24          |
+| `exp2_battery`   | 4.2 / Fig. 8, 9b | + batteries        | `no_corr` | `increasing` | `true`          | 1         | 50            | 24          |
+| `exp1_cons`      | 4.3 / Fig. 10, 12a | Consecutive op.  | `no_corr` | `constant`   | `false`         | 10        | 100           | 24          |
+| `exp2_cons`      | 4.3 / Fig. 11, 12b | Consecutive op.  | `no_corr` | `increasing` | `false`         | 10        | 100           | 24          |
+| `exp1_48`        | 4.4 / Fig. 13, 14 | 48-dim, batteries | `decr`    | `increasing` | `true`          | 1         | 100           | 48          |
+
+### Configuration variables
+
+| Global variable   | Meaning |
+|-------------------|---------|
+| `dimension`       | Number of time windows N (the dimension of the probability function). |
+| `R_type`          | Correlation structure of the random consumption: `'no_corr'` (identity), `'decr'` (linearly decaying Toeplitz matrix R(i,j) = 1 − \|i−j\|/N, see Appendix B of the paper), `'fix'`, `'big'` (constant off-diagonal values; not used in the paper). Generated by `generateKorrelationMatrix.m`. |
+| `std_type`        | Standard deviation profile of the random consumption: `'constant'` or `'increasing'` (Tables 1–2 of the paper). Generated by `generateMuEStd.m`. |
+| `use_batteries`   | `true` selects the battery-extended model (decision vector (y, x) ∈ R^2N, Section 3.3 of the paper). |
+| `cons_op`         | Number of mandatory consecutive operation periods k (band matrix C of Section 3.4); `1` disables the constraint. |
+| `maxItNumber`     | Number of column generation iterations. |
+| `experiment_name` | Prefix for the saved output files. |
+| `save_directory`  | Directory where results are written. |
+
+Timing measurements (Section 4.5 of the paper, Tables 3–4 and Figure 15) are produced with `DSM_time.m`, and the figures are plotted with `DSM_time_plot.m`.
+
+## Repository structure
+
+### Drivers and experiments
+| File | Purpose |
+|------|---------|
+| `CEJOR_experiments.m` | Top-level script: configures and launches the paper's experiments. |
+| `callDmandSideProblem.m` | Driver: sets solver parameters, adds CPLEX to the path, loads the problem data, and calls the solver. |
+| `DSM_time.m`, `DSM_time_plot.m` | CPU-time measurements and plots (paper Section 4.5). |
+| `CEJOR_exp_20260625/` | Output directory with the results of the paper's runs. |
+
+### Problem construction
+| File | Purpose |
+|------|---------|
+| `DataloadDemandSideProblem3D_cont.m` | Assembles the LP data (A, b, T, bounds) for the models without batteries (basic and consecutive-operation). |
+| `DataloadDemandSideProblem3D_y_all.m` | Assembles the LP data for the battery-extended model. |
+| `generateMuEStd.m` | Expected values and standard deviations of the random consumption (Tables 1–2). |
+| `generateKorrelationMatrix.m` | Correlation matrix of the random consumption (identity, linear decay, or constant off-diagonal). |
+| `getParameter.m` | Scalar model parameters. |
+
+### Solver core
+| File | Purpose |
+|------|---------|
+| `DemandSideProblem.m` | Main column generation loop: builds and re-solves the LP master problem, calls the oracle, records the probability per iteration. |
+| `searchMINGradient.m` | Oracle: approximate steepest-descent step for maximizing the reduced cost. |
+| `searchMINGoldenSection.m` | Inexact golden-section line search used inside the oracle. |
+| `computeFi.m`, `computeFunctionValueAll.m` | Evaluation of φ(z) = −log F(z) at test points. |
+| `computeFunctionGradAll.m`, `computeFunctionGradFi.m` | Evaluation of the gradient of φ. |
+| `computeU.m` | Extraction of the dual (shadow price) vector passed to the oracle. |
+| `computeZnull.m`, `calculateZCounter.m`, `calculateZCounterSimple.m` | Construction of the initial test points z₀, …, z_k. |
+| `computeBrick.m` | Bounding box of the relevant region of the distribution (given the probability tolerance `ptol`). |
+| `computeErrorEstimation.m` | Error estimation for the numerical distribution function values. |
+
+### Multivariate normal numerics
+| File | Purpose |
+|------|---------|
+| `qsimvnv.m` | Alan Genz's quasi–Monte Carlo routine for multivariate normal probabilities (included with its original copyright notice). |
+| `mvnmethod.m` | Wrapper selecting the MVN computation method. |
+| `gradientMVN.m`, `gradientMVN_simple.m`, `derivativeMVN.m` | Gradient of the multivariate normal distribution function via conditional distribution values. |
+
+## Output
+
+Each run records, among others, the vector of reached probabilities per iteration (`pvec`, plotted as the convergence curves in Figures 6, 9, 12, and 14b of the paper), the optimal schedule `x` (and the battery schedule in the extended model), the number of oracle (Genz-routine) calls, and timing information. Results are saved under `save_directory` with the `experiment_name` prefix.
+
+## Reproducibility notes
+
+- The oracle uses randomized quasi–Monte Carlo evaluations, so the convergence curves vary slightly between runs; the paper reports five independent runs for all timing experiments. Set MATLAB's random seed (`rng`) for exactly repeatable runs.
+- The CPLEX master problem is solved with the simplex method at a tolerance of 1e-4.
+
+## How to cite
+
+If you use this solver, please cite the paper above and the methodological papers it builds on:
+
+1. Fábián, C. I., Csizmás, E., Drenyovszki, R., van Ackooij, W., Vajnai, T., Kovács, L., Szántai, T.: Probability maximization by inner approximation. *Acta Polytechnica Hungarica* 15(1), 105–125 (2018).
+2. Fábián, C. I., Csizmás, E., Drenyovszki, R., Vajnai, T., Kovács, L., Szántai, T.: A randomized method for handling a difficult function in a convex optimization problem, motivated by probabilistic programming. *Annals of Operations Research* (2025). doi:10.1007/s10479-019-03143-z
+3. Csizmás, E., Drenyovszki, R., Szántai, T., Fábián, C. I.: Random descent steps in a probability maximization scheme. *Journal of Optimization Theory and Applications* 205(1), 13 (2025).
+
+The multivariate normal probabilities are computed with:
+
+4. Genz, A.: Numerical computation of multivariate normal probabilities. *Journal of Computational and Graphical Statistics* 1(4), 141–149 (1992).
+
+## License
+
+The solver code is released under the [LICENSE](LICENSE) of this repository. `qsimvnv.m` is © Alan Genz and is redistributed under the terms stated in its header.
+
+## Contact
+
+Rajmund Drenyovszki — drenyovszki.rajmund@nje.hu
+Department of Information Technology, GAMF Faculty of Engineering and Computer Science, John von Neumann University, Kecskemét, Hungary
